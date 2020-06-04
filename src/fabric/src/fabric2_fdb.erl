@@ -1299,7 +1299,6 @@ bump_db_version(#{} = Db) ->
     DbVersionVal = erlfdb_tuple:pack_vs({DbVersion}),
 
     ok = erlfdb:set_versionstamped_value(Tx, DbVersionKey, DbVersionVal),
-    ok = bump_metadata_version(Tx),
     ok.
 
 
