@@ -196,9 +196,7 @@ create(#{} = Db0, Options) ->
     % This key is responsible for telling us when something in
     % the database cache (i.e., fabric2_server's ets table) has
     % changed and requires re-loading. This currently includes
-    % revs_limit and validate_doc_update functions. There's
-    % no order to versioning here. Its just a value that changes
-    % that is used in the ensure_current check.
+    % revs_limit and validate_doc_update functions.
     DbVersionKey = erlfdb_tuple:pack({?DB_VERSION}, DbPrefix),
     DbVersion = fabric2_util:uuid(),
     erlfdb:set(Tx, DbVersionKey, DbVersion),
@@ -566,8 +564,7 @@ set_config(#{} = Db0, Key, Val) when is_atom(Key) ->
     end,
     DbKey = erlfdb_tuple:pack({?DB_CONFIG, BinKey}, DbPrefix),
     erlfdb:set(Tx, DbKey, BinVal),
-    {ok, DbVersion} = bump_db_version(Db),
-    {ok, Db#{db_version := DbVersion, Key := Val}}.
+    bump_db_version(Db).
 
 
 get_stat(#{} = Db, StatKey) ->
@@ -1298,10 +1295,12 @@ bump_db_version(#{} = Db) ->
     } = Db,
 
     DbVersionKey = erlfdb_tuple:pack({?DB_VERSION}, DbPrefix),
-    DbVersion = fabric2_util:uuid(),
-    ok = erlfdb:set(Tx, DbVersionKey, DbVersion),
+    DbVersion = new_versionstamp(Tx),
+    DbVersionVal = erlfdb_tuple:pack_vs({DbVersion}),
+
+    ok = erlfdb:set_versionstamped_value(Tx, DbVersionKey, DbVersionVal),
     ok = bump_metadata_version(Tx),
-    {ok, DbVersion}.
+    ok.
 
 
 check_db_version(#{} = Db, CheckDbVersion) ->
