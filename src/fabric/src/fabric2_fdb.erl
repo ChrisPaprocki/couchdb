@@ -1252,6 +1252,39 @@ load_validate_doc_funs(#{} = Db) ->
     }.
 
 
+ensure_current(Db) ->
+    ensure_current(Db, true).
+
+
+ensure_current(#{} = Db0, CheckDbVersion) ->
+    require_transaction(Db0),
+    ok = check_metadata_version(Db0),
+
+    if not CheckDbVersion -> ok; true ->
+        ok = check_db_version(Db0)
+    end,
+
+    % Don't update check_current_ts if it doesn't exist
+    Db2 = case maps:is_key(check_current_ts, Db0) of
+        true ->
+            Now = erlang:monotonic_time(millisecond),
+            Db1 = Db0#{check_current_ts := Now},
+            fabric2_server:maybe_update(Db1),
+            Db1;
+        false ->
+            Db0
+    end,
+
+    case maps:get(security_fun, Db2) of
+        SecurityFun when is_function(SecurityFun, 2) ->
+            #{security_doc := SecDoc} = Db2,
+            ok = SecurityFun(Db2, SecDoc),
+            Db2#{security_fun := undefined};
+        undefined ->
+            Db2
+    end.
+
+
 bump_metadata_version(Tx) ->
     % The 14 zero bytes is pulled from the PR for adding the
     % metadata version key. Not sure why 14 bytes when version
@@ -1266,26 +1299,15 @@ check_metadata_version(#{} = Db) ->
     } = Db,
 
     AlreadyChecked = get(?PDICT_CHECKED_MD_IS_CURRENT),
-    if AlreadyChecked == true -> {current, Db}; true ->
-        case erlfdb:wait(erlfdb:get_ss(Tx, ?METADATA_VERSION_KEY)) of
-            Version ->
-                put(?PDICT_CHECKED_MD_IS_CURRENT, true),
-                % We want to set a read conflict on the db version as we'd want
-                % to conflict with any writes to this particular db. However
-                % during db creation db prefix might not exist yet so we don't
-                % add a read-conflict on it then.
-                case maps:get(db_prefix, Db, not_found) of
-                    not_found ->
-                        ok;
-                    <<_/binary>> = DbPrefix ->
-                        DbVerKey = erlfdb_tuple:pack({?DB_VERSION}, DbPrefix),
-                        erlfdb:add_read_conflict_key(Tx, DbVerKey)
-                end,
-                {current, Db};
-            NewVersion ->
-                {stale, Db#{md_version := NewVersion}}
-        end
-    end.
+    if AlreadyChecked == true -> ok; true ->
+        CurrVersion = erlfdb:wait(erlfdb:get_ss(Tx, ?METADATA_VERSION_KEY)),
+        if CurrVersion == Version -> ok; true ->
+            fabric2_server:maybe_remove(Db),
+            throw({?MODULE, reopen})
+        end,
+        put(?PDICT_CHECKED_MD_IS_CURRENT, true)
+    end,
+    ok.
 
 
 bump_db_version(#{} = Db) ->
@@ -1302,7 +1324,7 @@ bump_db_version(#{} = Db) ->
     ok.
 
 
-check_db_version(#{} = Db, CheckDbVersion) ->
+check_db_version(#{} = Db) ->
     #{
         tx := Tx,
         db_prefix := DbPrefix,
@@ -1310,16 +1332,16 @@ check_db_version(#{} = Db, CheckDbVersion) ->
     } = Db,
 
     AlreadyChecked = get(?PDICT_CHECKED_DB_IS_CURRENT),
-    if not CheckDbVersion orelse AlreadyChecked == true -> current; true ->
+    if AlreadyChecked -> ok; true ->
         DbVersionKey = erlfdb_tuple:pack({?DB_VERSION}, DbPrefix),
-        case erlfdb:wait(erlfdb:get(Tx, DbVersionKey)) of
-            DbVersion ->
-                put(?PDICT_CHECKED_DB_IS_CURRENT, true),
-                current;
-            _NewDBVersion ->
-                stale
-        end
-    end.
+        CurrVersion = erlfdb:wait(erlfdb:get(Tx, DbVersionKey)),
+        if CurrVersion == DbVersion -> ok; true ->
+            fabric2_server:maybe_remove(Db),
+            throw({?MODULE, reopen})
+        end,
+        put(?PDICT_CHECKED_DB_IS_CURRENT, true)
+    end,
+    ok.
 
 
 soft_delete_db(Db) ->
@@ -1854,40 +1876,6 @@ require_transaction(#{tx := {erlfdb_transaction, _}} = _Db) ->
     ok;
 require_transaction(#{} = _Db) ->
     erlang:error(transaction_required).
-
-
-ensure_current(Db) ->
-    ensure_current(Db, true).
-
-
-ensure_current(#{} = Db0, CheckDbVersion) ->
-    require_transaction(Db0),
-    Db3 = case check_metadata_version(Db0) of
-        {current, Db1} ->
-            Db1;
-        {stale, Db1} ->
-            case check_db_version(Db1, CheckDbVersion) of
-                current ->
-                    % If db version is current, update cache with the latest
-                    % metadata so other requests can immediately see the
-                    % refreshed db handle.
-                    Now = erlang:monotonic_time(millisecond),
-                    Db2 = Db1#{check_current_ts := Now},
-                    fabric2_server:maybe_update(Db2),
-                    Db2;
-                stale ->
-                    fabric2_server:maybe_remove(Db1),
-                    throw({?MODULE, reopen})
-            end
-    end,
-    case maps:get(security_fun, Db3) of
-        SecurityFun when is_function(SecurityFun, 2) ->
-            #{security_doc := SecDoc} = Db3,
-            ok = SecurityFun(Db3, SecDoc),
-            Db3#{security_fun := undefined};
-        undefined ->
-            Db3
-    end.
 
 
 check_db_instance(undefined) ->
