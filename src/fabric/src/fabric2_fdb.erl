@@ -1883,20 +1883,20 @@ check_db_instance(undefined) ->
 
 check_db_instance(#{} = Db) ->
     require_transaction(Db),
-    case check_metadata_version(Db) of
-        {current, Db1} ->
-            Db1;
-        {stale, Db1} ->
-            #{
-                tx := Tx,
-                uuid := UUID,
-                db_prefix := DbPrefix
-            } = Db1,
-            UUIDKey = erlfdb_tuple:pack({?DB_CONFIG, <<"uuid">>}, DbPrefix),
-            case erlfdb:wait(erlfdb:get(Tx, UUIDKey)) of
-                UUID -> Db1;
-                _ -> error(database_does_not_exist)
-            end
+    try check_metadata_version(Db) of
+        ok ->
+            Db
+    catch throw:{?MODULE, reopen} ->
+        #{
+            tx := Tx,
+            uuid := UUID,
+            db_prefix := DbPrefix
+        } = Db,
+        UUIDKey = erlfdb_tuple:pack({?DB_CONFIG, <<"uuid">>}, DbPrefix),
+        case erlfdb:wait(erlfdb:get(Tx, UUIDKey)) of
+            UUID -> Db;
+            _ -> error(database_does_not_exist)
+        end
     end.
 
 
