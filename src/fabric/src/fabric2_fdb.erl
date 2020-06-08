@@ -184,7 +184,8 @@ create(#{} = Db0, Options) ->
     #{
         name := DbName,
         tx := Tx,
-        layer_prefix := LayerPrefix
+        layer_prefix := LayerPrefix,
+        md_version := MDVersion
     } = Db1 = ensure_current(Db0, false),
 
     DbKey = erlfdb_tuple:pack({?ALL_DBS, DbName}, LayerPrefix),
@@ -193,13 +194,17 @@ create(#{} = Db0, Options) ->
     DbPrefix = erlfdb_tuple:pack({?DBS, AllocPrefix}, LayerPrefix),
     erlfdb:set(Tx, DbKey, DbPrefix),
 
-    % This key is responsible for telling us when something in
-    % the database cache (i.e., fabric2_server's ets table) has
-    % changed and requires re-loading. This currently includes
-    % revs_limit and validate_doc_update functions.
+    % This is the key used by fabric2_server to determine when
+    % we need to reopen a database. Currently setting db config
+    % values or updating design documents triggers a change
+    % to this value.
+    %
+    % On creation we're setting this to the current MDVersion
+    % because it is a valid versionstamp on the current cluster
+    % and also so that we don't have to use two transactions
+    % when creating a database.
     DbVersionKey = erlfdb_tuple:pack({?DB_VERSION}, DbPrefix),
-    DbVersion = fabric2_util:uuid(),
-    erlfdb:set(Tx, DbVersionKey, DbVersion),
+    erlfdb:set(Tx, DbVersionKey, MDVersion),
 
     UUID = fabric2_util:uuid(),
 
