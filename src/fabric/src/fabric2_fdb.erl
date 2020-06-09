@@ -1200,16 +1200,22 @@ debug_cluster(Start, End) ->
 
 init_db(Tx, DbName, Options) ->
     Prefix = get_dir(Tx),
-    Version = erlfdb:wait(erlfdb:get(Tx, ?METADATA_VERSION_KEY)),
     #{
         name => DbName,
         tx => Tx,
         layer_prefix => Prefix,
-        md_version => Version,
+        md_version => get_md_version(Tx),
 
         security_fun => undefined,
         db_options => Options
     }.
+
+
+get_md_version(Tx) ->
+    case erlfdb:wait(erlfdb:get(Tx, ?METADATA_VERSION_KEY)) of
+        not_found -> <<0:80>>;
+        Version -> Version
+    end.
 
 
 load_validate_doc_funs(#{} = Db) ->
@@ -1318,7 +1324,7 @@ check_metadata_version(#{} = Db) ->
 
     AlreadyChecked = get(?PDICT_CHECKED_MD_IS_CURRENT),
     if AlreadyChecked == true -> ok; true ->
-        CurrVersion = erlfdb:wait(erlfdb:get_ss(Tx, ?METADATA_VERSION_KEY)),
+        CurrVersion = get_md_version(Tx),
         if CurrVersion == Version -> ok; true ->
             fabric2_server:maybe_remove(Db),
             throw({?MODULE, reopen})
