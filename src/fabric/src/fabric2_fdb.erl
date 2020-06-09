@@ -202,9 +202,13 @@ create(#{} = Db0, Options) ->
     % On creation we're setting this to the current MDVersion
     % because it is a valid versionstamp on the current cluster
     % and also so that we don't have to use two transactions
-    % when creating a database.
+    % when creating a database. The addition of the 51 prefix
+    % and two trailing zeros changes the metadataVersion from
+    % a raw 80 bit versionstamp into a tuple encoded 96 bit
+    % versionstamp
     DbVersionKey = erlfdb_tuple:pack({?DB_VERSION}, DbPrefix),
-    erlfdb:set(Tx, DbVersionKey, MDVersion),
+    DbVersion = <<51, MDVersion/binary, 0, 0>>,
+    erlfdb:set(Tx, DbVersionKey, DbVersion),
 
     UUID = fabric2_util:uuid(),
 
@@ -310,15 +314,14 @@ open(#{} = Db0, Options) ->
 refresh(#{tx := undefined, name := DbName} = Db) ->
     #{
         uuid := UUID,
-        md_version := OldVer
+        db_version := OldVer
     } = Db,
 
     case fabric2_server:fetch(DbName, UUID) of
-        % Relying on these assumptions about the `md_version` value:
-        %  - It is bumped every time `db_version` is bumped
+        % Relying on these assumptions about the `db_version` value:
         %  - Is a versionstamp, so we can check which one is newer
         %  - If it is `not_found`, it would sort less than a binary value
-        #{md_version := Ver} = Db1 when Ver > OldVer ->
+        #{db_version := Ver} = Db1 when Ver > OldVer ->
             Db1#{
                 user_ctx := maps:get(user_ctx, Db),
                 security_fun := maps:get(security_fun, Db)
@@ -340,7 +343,11 @@ reopen(#{} = OldDb) ->
         uuid := UUID,
         db_options := Options,
         user_ctx := UserCtx,
-        security_fun := SecurityFun
+        security_fun := SecurityFun,
+
+        validate_doc_update_funs := VDUs,
+        before_doc_update := BDU,
+        after_doc_read := ADR
     } = OldDb,
     Options1 = lists:keystore(user_ctx, 1, Options, {user_ctx, UserCtx}),
     NewDb = open(init_db(Tx, DbName, Options1), Options1),
@@ -351,7 +358,13 @@ reopen(#{} = OldDb) ->
         _OtherUUID -> error(database_does_not_exist)
     end,
 
-    NewDb#{security_fun := SecurityFun}.
+    NewDb#{
+        security_fun := SecurityFun,
+
+        validate_doc_update_funs := VDUs,
+        before_doc_update := BDU,
+        after_doc_read := ADR
+    }.
 
 
 delete(#{} = Db) ->
